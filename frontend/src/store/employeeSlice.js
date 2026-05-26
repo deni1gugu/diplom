@@ -29,7 +29,7 @@ export const updateEmployee = createAsyncThunk(
   'employees/updateEmployee',
   async ({ id, ...employeeData }, { rejectWithValue }) => {
     try {
-      const response = await api.put(`/employees/${id}/`, employeeData);
+      const response = await api.patch(`/employees/${id}/`, employeeData);
       return response.data;
     } catch (error) {
       return rejectWithValue(error.response?.data || 'Ошибка обновления');
