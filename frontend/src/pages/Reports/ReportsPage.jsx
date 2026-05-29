@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { toast } from 'react-toastify';
 import api from '../../api/axios';
 
@@ -111,29 +111,132 @@ const ReportsPage = () => {
     }
   }, [selectedEmployee, dateFrom, dateTo, validateDates]);
 
-  // Экспорт в CSV
+  const formatDateForCSV = (dateString) => {
+    if (!dateString) return '';
+    try {
+      const date = new Date(dateString);
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    } catch {
+      return '';
+    }
+  };
+
+  const formatTimeForCSV = (dateTimeString) => {
+    if (!dateTimeString) return '';
+    try {
+      const date = new Date(dateTimeString);
+      const hours = String(date.getHours()).padStart(2, '0');
+      const minutes = String(date.getMinutes()).padStart(2, '0');
+      return `${hours}:${minutes}`;
+    } catch {
+      return '';
+    }
+  };
+
+  const downloadCSV = (csvContent, filename) => {
+    const bom = '\uFEFF';
+    const blob = new Blob([bom + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   const handleExport = useCallback(async () => {
     if (!validateDates()) return;
 
+    let dataToExport = reportData;
+    
+    if (!dataToExport && selectedEmployee) {
+      setExporting(true);
+      try {
+        const response = await api.get('/reports/employee_report/', {
+          params: { 
+            employee_id: selectedEmployee, 
+            date_from: dateFrom, 
+            date_to: dateTo 
+          }
+        });
+        dataToExport = response.data;
+      } catch (error) {
+        console.error('Ошибка получения данных:', error);
+        toast.error('Не удалось получить данные для экспорта');
+        setExporting(false);
+        return;
+      }
+    }
+
+    if (!dataToExport || !dataToExport.records || dataToExport.records.length === 0) {
+      toast.warning('Нет данных для экспорта');
+      setExporting(false);
+      return;
+    }
+
     setExporting(true);
     try {
-      const response = await api.get('/reports/export_csv/', {
-        params: { date_from: dateFrom, date_to: dateTo },
-        responseType: 'blob',
+      const headers = [
+        'Дата',
+        'День недели',
+        'Смена (начало)',
+        'Смена (конец)',
+        'Приход',
+        'Уход',
+        'Отработано (часов)',
+        'Опоздание',
+        'Ранний уход'
+      ];
+
+      const weekdays = ['Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота'];
+
+      const rows = dataToExport.records.map(record => {
+        const date = new Date(record.date);
+        const weekday = weekdays[date.getDay()];
+        
+        return [
+          formatDateForCSV(record.date),
+          weekday,
+          record.start_time || '',
+          record.end_time || '',
+          formatTimeForCSV(record.check_in),
+          formatTimeForCSV(record.check_out),
+          record.worked_hours || 0,
+          record.is_late ? 'Да' : 'Нет',
+          record.is_early_departure ? 'Да' : 'Нет'
+        ];
       });
 
-      // Создаём имя файла
-      const fileName = `report_${dateFrom}_to_${dateTo}.csv`;
+      const summaryRow = [
+        'ИТОГО:',
+        '',
+        '',
+        '',
+        '',
+        '',
+        `${dataToExport.summary?.total_hours || 0}`,
+        `${dataToExport.summary?.late_days || 0}`,
+        `${dataToExport.summary?.early_departures || 0}`
+      ];
+
+      const csvRows = [
+        headers.join(';'),
+        ...rows.map(row => row.join(';')),
+        '',
+        summaryRow.join(';')
+      ];
       
-      // Создаём ссылку для скачивания
-      const url = window.URL.createObjectURL(new Blob([response.data], { type: 'text/csv;charset=utf-8;' }));
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', fileName);
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(url);
+      const csvContent = csvRows.join('\n');
+
+      const employeeName = dataToExport.employee?.full_name || 'сотрудник';
+      const fileName = `report_${employeeName}_${dateFrom}_to_${dateTo}.csv`;
+
+      downloadCSV(csvContent, fileName);
       
       toast.success('Отчёт успешно скачан');
     } catch (error) {
@@ -142,39 +245,24 @@ const ReportsPage = () => {
     } finally {
       setExporting(false);
     }
-  }, [dateFrom, dateTo, validateDates]);
+  }, [dateFrom, dateTo, selectedEmployee, reportData, validateDates]);
 
-  // Обработчики изменения полей
-  const handleEmployeeChange = useCallback((e) => {
+  const handleEmployeeChange = (e) => {
     setSelectedEmployee(e.target.value);
-    setReportData(null); // Сбрасываем отчёт при смене сотрудника
-  }, []);
+    setReportData(null);
+  };
 
-  const handleDateFromChange = useCallback((e) => {
+  const handleDateFromChange = (e) => {
     setDateFrom(e.target.value);
     setReportData(null);
-  }, []);
+  };
 
-  const handleDateToChange = useCallback((e) => {
+  const handleDateToChange = (e) => {
     setDateTo(e.target.value);
     setReportData(null);
-  }, []);
+  };
 
-  // Мемоизированный список сотрудников для выбора
-  const employeeOptions = useMemo(() => {
-    if (employeesLoading) {
-      return <option value="" disabled>Загрузка сотрудников...</option>;
-    }
-    if (employees.length === 0) {
-      return <option value="" disabled>Нет доступных сотрудников</option>;
-    }
-    return employees.map(emp => (
-      <option key={emp.id} value={emp.id}>{emp.full_name}</option>
-    ));
-  }, [employees, employeesLoading]);
-
-  // Форматирование времени
-  const formatTime = useCallback((dateTimeString) => {
+  const formatTime = (dateTimeString) => {
     if (!dateTimeString) return '—';
     try {
       return new Date(dateTimeString).toLocaleTimeString('ru-RU', { 
@@ -184,10 +272,9 @@ const ReportsPage = () => {
     } catch {
       return '—';
     }
-  }, []);
+  };
 
-  // Форматирование даты
-  const formatDate = useCallback((dateString) => {
+  const formatDate = (dateString) => {
     if (!dateString) return '—';
     try {
       return new Date(dateString).toLocaleDateString('ru-RU', { 
@@ -197,11 +284,10 @@ const ReportsPage = () => {
     } catch {
       return '—';
     }
-  }, []);
+  };
 
   return (
     <div style={{ fontFamily: "'Geologica', 'Segoe UI', sans-serif" }}>
-      {/* Заголовок */}
       <div style={{ marginBottom: 24 }}>
         <h1 style={{ margin: 0, fontSize: 24, fontWeight: 700, color: '#111827' }}>Отчёты</h1>
         <p style={{ margin: '4px 0 0', fontSize: 13, color: '#6b7280' }}>
@@ -209,7 +295,6 @@ const ReportsPage = () => {
         </p>
       </div>
 
-      {/* Фильтры */}
       <div style={{
         background: '#fff', borderRadius: 16, padding: 24,
         boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.04)',
@@ -233,10 +318,11 @@ const ReportsPage = () => {
               onChange={handleEmployeeChange} 
               style={{ ...inputStyle, cursor: 'pointer' }}
               disabled={employeesLoading}
-              aria-label="Выберите сотрудника"
             >
               <option value="">Выберите сотрудника</option>
-              {employeeOptions}
+              {employees.map(emp => (
+                <option key={emp.id} value={emp.id}>{emp.full_name}</option>
+              ))}
             </select>
           </div>
           <div>
@@ -248,9 +334,6 @@ const ReportsPage = () => {
               value={dateFrom} 
               onChange={handleDateFromChange} 
               style={inputStyle}
-              onFocus={e => e.currentTarget.style.borderColor = '#2563eb'}
-              onBlur={e => e.currentTarget.style.borderColor = '#e5e7eb'}
-              aria-label="Начальная дата периода"
             />
           </div>
           <div>
@@ -262,9 +345,6 @@ const ReportsPage = () => {
               value={dateTo} 
               onChange={handleDateToChange} 
               style={inputStyle}
-              onFocus={e => e.currentTarget.style.borderColor = '#2563eb'}
-              onBlur={e => e.currentTarget.style.borderColor = '#e5e7eb'}
-              aria-label="Конечная дата периода"
             />
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -285,28 +365,19 @@ const ReportsPage = () => {
                 boxShadow: (loading || !selectedEmployee || employeesLoading) 
                   ? 'none' 
                   : '0 4px 12px rgba(37,99,235,0.3)',
-                transition: 'all 0.15s',
-              }}
-              onMouseEnter={e => {
-                if (!loading && selectedEmployee && !employeesLoading) {
-                  e.currentTarget.style.transform = 'translateY(-1px)';
-                }
-              }}
-              onMouseLeave={e => {
-                e.currentTarget.style.transform = 'translateY(0)';
               }}
             >
               {loading ? '⏳ Формирование...' : '📊 Сформировать'}
             </button>
             <button 
               onClick={handleExport} 
-              disabled={exporting || !dateFrom || !dateTo}
+              disabled={exporting || (!reportData && !selectedEmployee)}
               style={{
-                background: exporting || !dateFrom || !dateTo ? '#d1fae5' : '#f0fdf4',
+                background: exporting || (!reportData && !selectedEmployee) ? '#d1fae5' : '#f0fdf4',
                 color: '#15803d', border: '1.5px solid #bbf7d0',
                 borderRadius: 10, padding: '10px 16px', fontWeight: 600, fontSize: 14,
-                cursor: (exporting || !dateFrom || !dateTo) ? 'not-allowed' : 'pointer',
-                whiteSpace: 'nowrap', transition: 'all 0.15s',
+                cursor: (exporting || (!reportData && !selectedEmployee)) ? 'not-allowed' : 'pointer',
+                whiteSpace: 'nowrap',
               }}
             >
               {exporting ? '⏳ Экспорт...' : '📥 CSV'}
@@ -314,7 +385,6 @@ const ReportsPage = () => {
           </div>
         </div>
         
-        {/* Подсказка */}
         {(!dateFrom || !dateTo) && (
           <p style={{ margin: '12px 0 0', fontSize: 12, color: '#f59e0b' }}>
             ⚠️ Укажите период для формирования отчёта
@@ -327,14 +397,12 @@ const ReportsPage = () => {
         )}
       </div>
 
-      {/* Результат отчёта */}
       {reportData && (
         <div style={{
           background: '#fff', borderRadius: 16,
           boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.04)',
           border: '1px solid #e5e7eb', overflow: 'hidden',
         }}>
-          {/* Шапка отчёта */}
           <div style={{
             padding: '20px 24px',
             background: 'linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%)',
@@ -365,7 +433,6 @@ const ReportsPage = () => {
             </div>
           </div>
 
-          {/* Сводка */}
           <div style={{ padding: 24, borderBottom: '1px solid #e5e7eb' }}>
             <div style={{ 
               display: 'grid', 
@@ -399,7 +466,6 @@ const ReportsPage = () => {
             </div>
           </div>
 
-          {/* Таблица записей */}
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 800 }}>
               <thead>
@@ -483,7 +549,6 @@ const ReportsPage = () => {
             </table>
           </div>
           
-          {/* Футер */}
           {reportData.records && reportData.records.length > 0 && (
             <div style={{ 
               padding: '12px 20px', 
@@ -506,7 +571,6 @@ const ReportsPage = () => {
         </div>
       )}
 
-      {/* Инструкция при отсутствии отчёта */}
       {!reportData && !loading && (
         <div style={{
           background: '#f9fafb', borderRadius: 16, padding: 48,
