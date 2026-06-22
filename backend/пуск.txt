@@ -1,0 +1,7 @@
+cd путь\к\diplom\backend
+venv\Scripts\activate
+python manage.py runserver
+
+
+cd путь\к\diplom\frontend
+npm start
